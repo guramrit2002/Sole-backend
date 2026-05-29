@@ -1,9 +1,31 @@
-boto3>=1.34.0
+# Django core
+Django>=4.2.30,<5.0
+djangorestframework>=3.16.0
+djangorestframework-simplejwt>=5.5.0
+django-cors-headers>=4.9.0
 python-dotenv>=1.0.0
+
+# WSGI server
+gunicorn>=22.0.0
+
+# Database
+# sqlite3 is built-in; add psycopg2-binary here if switching to Postgres
+
+# Async / task queue
+celery[redis]>=5.4.0
+redis>=5.0.0
+
+# AWS / S3
+boto3>=1.34.0
+
+# Scraper stack
 curl-cffi>=0.7.0
 beautifulsoup4>=4.12.0
 lxml>=5.0.0
 scrapling>=0.2.9
 playwright>=1.44.0
+
+# Utilities
 click>=8.1.0
 rich>=13.0.0
+requests>=2.32.0
