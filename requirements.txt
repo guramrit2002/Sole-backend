@@ -1,0 +1,9 @@
+boto3>=1.34.0
+python-dotenv>=1.0.0
+curl-cffi>=0.7.0
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+scrapling>=0.2.9
+playwright>=1.44.0
+click>=8.1.0
+rich>=13.0.0
