@@ -1,0 +1,42 @@
+services:
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  api:
+    build: .
+    restart: unless-stopped
+    env_file: sole/.env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./sole:/app/sole
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: >
+      sh -c "python manage.py migrate &&
+             gunicorn sole.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
+
+  celery:
+    build: .
+    restart: unless-stopped
+    env_file: sole/.env
+    environment:
+      CELERY_BROKER_URL: redis://redis:6379/0
+      CELERY_RESULT_BACKEND: redis://redis:6379/0
+    volumes:
+      - ./sole:/app/sole
+    depends_on:
+      redis:
+        condition: service_healthy
+    command: celery -A sole worker --loglevel=info --concurrency=2
