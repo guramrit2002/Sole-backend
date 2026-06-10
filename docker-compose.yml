@@ -32,7 +32,7 @@ services:
 
     labels:
       - traefik.enable=true
-      - traefik.http.routers.sole.rule=Host(`http://ec2-52-66-205-58.ap-south-1.compute.amazonaws.com/`)
+      - traefik.http.routers.sole.rule=Host(`ec2-52-66-205-58.ap-south-1.compute.amazonaws.com`)
       - traefik.http.routers.sole.entrypoints=websecure
       - traefik.http.routers.sole.tls.certresolver=letsencrypt
       - traefik.http.services.sole.loadbalancer.server.port=8000
