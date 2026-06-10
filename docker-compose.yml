@@ -1,8 +1,8 @@
 services:
-
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 10s
@@ -12,31 +12,53 @@ services:
   api:
     build: .
     restart: unless-stopped
-    env_file: sole/.env
+
+    env_file:
+      - .env
+
     environment:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./sole:/app/sole
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: >
-      sh -c "python manage.py migrate &&
-             gunicorn sole.wsgi:application --bind 0.0.0.0:8000 --workers 2 --timeout 120"
+
+    expose:
+      - "8000"
+
+    command:
+      - gunicorn
+      - sole.wsgi:application
+      - --bind=0.0.0.0:8000
+      - --workers=2
+      - --timeout=120
+
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.sole.rule=Host(`http://ec2-52-66-205-58.ap-south-1.compute.amazonaws.com/`)
+      - traefik.http.routers.sole.entrypoints=websecure
+      - traefik.http.routers.sole.tls.certresolver=letsencrypt
+      - traefik.http.services.sole.loadbalancer.server.port=8000
+
+    networks:
+      - spider
 
   celery:
     build: .
     restart: unless-stopped
-    env_file: sole/.env
+
+    env_file:
+      - .env
+
     environment:
       CELERY_BROKER_URL: redis://redis:6379/0
       CELERY_RESULT_BACKEND: redis://redis:6379/0
-    volumes:
-      - ./sole:/app/sole
-    depends_on:
-      redis:
-        condition: service_healthy
-    command: celery -A sole worker --loglevel=info --concurrency=2
+
+    command:
+      - celery
+      - -A
+      - sole
+      - worker
+      - --loglevel=info
+      - --concurrency=2
+
+networks:
+  spider:
+    external: true
