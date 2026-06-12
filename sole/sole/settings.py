@@ -30,7 +30,7 @@ SECRET_KEY = os.environ.get('SECRET_KEY')
 DEBUG = os.environ.get('DEBUG')
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://*.trycloudflare.com",
+    "https://titanium-deviation-newcastle-pupils.trycloudflare.com",
 ]
 
 ALLOWED_HOSTS = [
