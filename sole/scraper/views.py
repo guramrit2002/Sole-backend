@@ -10,9 +10,17 @@ from .models import ScrapedProduct
 from .serializers import (
     ScrapeRequestSerializer, ScrapedProductSerializer,
 )
-from .services.pipeline import run
+from .services.pipeline import run, store_image
 
 logger = logging.getLogger(__name__)
+
+
+def _store_s3_image_url(image_url: str) -> str:
+    try:
+        return store_image(image_url)
+    except Exception:
+        logger.exception("S3 image upload failed for %s", image_url)
+        raise
 
 
 class ScrapeView(APIView):
@@ -39,6 +47,15 @@ class ScrapeView(APIView):
         if not force:
             try:
                 cached = ScrapedProduct.objects.get(url_hash=url_hash)
+                if cached.image and not cached.image_s3:
+                    try:
+                        cached.image_s3 = _store_s3_image_url(cached.image)
+                        cached.save(update_fields=["image_s3", "updated_at"])
+                    except Exception as exc:
+                        return Response(
+                            {"error": "image upload failed", "detail": str(exc)},
+                            status=status.HTTP_502_BAD_GATEWAY,
+                        )
                 data   = ScrapedProductSerializer(cached).data
                 data["cached"] = True
                 return Response(data, status=status.HTTP_200_OK)
@@ -63,6 +80,16 @@ class ScrapeView(APIView):
             )
 
         source = urlparse(url).netloc.replace("www.", "")
+        image_s3 = None
+
+        if result.image:
+            try:
+                image_s3 = _store_s3_image_url(result.image)
+            except Exception as exc:
+                return Response(
+                    {"error": "image upload failed", "detail": str(exc)},
+                    status=status.HTTP_502_BAD_GATEWAY,
+                )
 
         product, _ = ScrapedProduct.objects.update_or_create(
             url_hash=url_hash,
@@ -72,6 +99,7 @@ class ScrapeView(APIView):
                 price      = result.price,
                 currency   = result.currency,
                 image      = result.image,
+                image_s3   = image_s3,
                 source     = source,
                 layer_used = result.source_layer,
                 is_complete= result.is_complete(),
@@ -82,4 +110,3 @@ class ScrapeView(APIView):
         data           = ScrapedProductSerializer(product).data
         data["cached"] = False
         return Response(data, status=status.HTTP_201_CREATED)
-

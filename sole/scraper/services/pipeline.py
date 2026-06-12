@@ -10,15 +10,13 @@ Rules:
 
 from __future__ import annotations
 
-import hashlib
 import logging
-import urllib.request
 from typing import Optional
 from urllib.parse import urlparse
 
 from . import layer1, layer2, layer3
 from .parser import ProductData
-from utils.s3 import S3Client, S3Error
+from utils.s3 import S3Client, S3Error, S3Utility
 
 
 def _merge(base: ProductData, new: ProductData) -> ProductData:
@@ -90,17 +88,8 @@ def run(url: str) -> Optional[ProductData]:
 
 # ── Image upload ──────────────────────────────────────────────────────────────
 
-_CONTENT_TYPE_TO_EXT = {
-    "image/jpeg":  "jpg",
-    "image/jpg":   "jpg",
-    "image/png":   "png",
-    "image/webp":  "webp",
-    "image/gif":   "gif",
-    "image/avif":  "avif",
-    "image/svg+xml": "svg",
-}
-
 _s3 = S3Client()
+_s3_utility = S3Utility(_s3)
 
 
 def store_image(image_url: str, expires_in: int = 3600) -> str:
@@ -127,25 +116,7 @@ def store_image(image_url: str, expires_in: int = 3600) -> str:
     if not image_url:
         raise ValueError("image_url must not be empty")
 
-    url_hash = hashlib.sha256(image_url.encode()).hexdigest()
-    ext      = _ext_from_url(image_url)       # fallback before fetch
-    s3_key   = f"images/{url_hash[:2]}/{url_hash}.{ext}"
-
-    if _s3.exists(s3_key):
-        logger.debug("image already in S3, skipping upload: %s", s3_key)
-        return _s3.presigned_get_url(s3_key, expires_in=expires_in)
-
-    image_bytes, content_type = _fetch_image(image_url)
-
-    # Refine extension now that we have the real content-type
-    resolved_ext = _CONTENT_TYPE_TO_EXT.get(content_type.split(";")[0].strip().lower())
-    if resolved_ext and resolved_ext != ext:
-        s3_key = f"images/{url_hash[:2]}/{url_hash}.{resolved_ext}"
-
-    _s3.upload_bytes(image_bytes, s3_key, content_type=content_type)
-    logger.info("stored image %s -> s3://%s", image_url, s3_key)
-
-    return _s3.presigned_get_url(s3_key, expires_in=expires_in)
+    return _s3_utility.store_image_from_url(image_url, expires_in=expires_in)
 
 
 def _fetch_image(image_url: str) -> tuple[bytes, str]:
@@ -155,20 +126,7 @@ def _fetch_image(image_url: str) -> tuple[bytes, str]:
     Sends a browser-like Accept header so CDNs serve the right format.
     Falls back to 'application/octet-stream' if the server omits Content-Type.
     """
-    req = urllib.request.Request(
-        image_url,
-        headers={
-            "User-Agent": (
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0 Safari/537.36"
-            ),
-            "Accept": "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
-        },
-    )
-    with urllib.request.urlopen(req, timeout=15) as resp:
-        content_type = resp.headers.get_content_type() or "application/octet-stream"
-        return resp.read(), content_type
+    return S3Utility.fetch_image(image_url)
 
 
 def _ext_from_url(image_url: str) -> str:
@@ -176,8 +134,4 @@ def _ext_from_url(image_url: str) -> str:
     Derive a file extension from the URL path.
     Returns 'jpg' as a safe fallback when the path has no recognisable extension.
     """
-    path = urlparse(image_url).path.lower()
-    for ext in ("jpg", "jpeg", "png", "webp", "gif", "avif", "svg"):
-        if path.endswith(f".{ext}"):
-            return "jpg" if ext == "jpeg" else ext
-    return "jpg"
+    return S3Utility.extension_from_url(image_url)

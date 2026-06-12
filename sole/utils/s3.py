@@ -17,9 +17,11 @@ Settings required in Django settings.py (all read from environment):
     AWS_S3_ENDPOINT_URL    (optional, for MinIO / localstack)
 """
 
-import io
+import hashlib
 import logging
-from typing import IO, Optional
+from typing import IO, Optional, Union
+import urllib.request
+from urllib.parse import urlparse
 
 import boto3
 import botocore.config
@@ -28,6 +30,15 @@ from django.conf import settings
 
 logger = logging.getLogger(__name__)
 
+_IMAGE_CONTENT_TYPE_TO_EXT = {
+    'image/jpeg': 'jpg',
+    'image/jpg': 'jpg',
+    'image/png': 'png',
+    'image/webp': 'webp',
+    'image/gif': 'gif',
+    'image/avif': 'avif',
+    'image/svg+xml': 'svg',
+}
 
 class S3Error(Exception):
     """Raised when any S3 operation fails."""
@@ -435,3 +446,157 @@ class S3Client:
             logger.info('CORS updated for bucket %s: %s', self._bucket, allowed_origins)
         except Exception as exc:
             self._handle_error(exc, f'set_cors on {self._bucket}')
+
+
+class S3Utility:
+    """
+    High-level image helper built on S3Client.
+
+    Use this class when application code wants to store an image and receive
+    either the stored S3 key or a temporary presigned URL for that object.
+    """
+
+    def __init__(
+        self,
+        client: Optional[S3Client] = None,
+        *,
+        image_prefix: str = 'images',
+    ) -> None:
+        self.client = client or S3Client()
+        self.image_prefix = image_prefix.strip('/')
+
+    def store_image(
+        self,
+        image: Union[bytes, IO[bytes]],
+        key: str,
+        *,
+        content_type: Optional[str] = None,
+        public: bool = False,
+    ) -> str:
+        """
+        Store image bytes or a binary file-like object in S3.
+
+        Args:
+            image: Bytes or readable binary stream.
+            key: Destination key relative to AWS_S3_KEY_PREFIX.
+            content_type: Image MIME type, for example 'image/jpeg'.
+            public: If True, upload with public-read ACL.
+
+        Returns:
+            The key that was stored, relative to AWS_S3_KEY_PREFIX.
+        """
+        if not key:
+            raise ValueError('key must not be empty')
+
+        if hasattr(image, 'read'):
+            self.client.upload_file(
+                image,
+                key,
+                content_type=content_type,
+                public=public,
+            )
+        else:
+            self.client.upload_bytes(
+                image,
+                key,
+                content_type=content_type,
+                public=public,
+            )
+        return key
+
+    def store_image_from_url(
+        self,
+        image_url: str,
+        *,
+        expires_in: int = 3600,
+        public: bool = False,
+    ) -> str:
+        """
+        Download an image URL, store it in S3, and return a presigned GET URL.
+
+        The generated key is stable for the same URL, so repeat calls can reuse
+        an existing S3 object and only generate a fresh presigned URL.
+        """
+        key = self.key_for_image_url(image_url)
+
+        if not self.client.exists(key):
+            image_bytes, content_type = self.fetch_image(image_url)
+            resolved_ext = _IMAGE_CONTENT_TYPE_TO_EXT.get(
+                content_type.split(';')[0].strip().lower()
+            )
+            if resolved_ext:
+                key = self.key_for_image_url(image_url, extension=resolved_ext)
+
+            if not self.client.exists(key):
+                self.store_image(
+                    image_bytes,
+                    key,
+                    content_type=content_type,
+                    public=public,
+                )
+                logger.info('stored image %s -> s3://%s', image_url, key)
+        else:
+            logger.debug('image already in S3, skipping upload: %s', key)
+
+        return self.create_presigned_url(key, expires_in=expires_in)
+
+    def create_presigned_url(self, key: str, *, expires_in: int = 3600) -> str:
+        """Create a temporary GET URL for a stored S3 object."""
+        if not key:
+            raise ValueError('key must not be empty')
+        return self.client.presigned_get_url(key, expires_in=expires_in)
+
+    def key_for_image_url(
+        self,
+        image_url: str,
+        *,
+        extension: Optional[str] = None,
+    ) -> str:
+        """Build a stable S3 image key from an image URL."""
+        if not image_url:
+            raise ValueError('image_url must not be empty')
+
+        url_hash = hashlib.sha256(image_url.encode()).hexdigest()
+        ext = extension or self.extension_from_url(image_url)
+        return f'{self.image_prefix}/{url_hash[:2]}/{url_hash}.{ext}'
+
+    @staticmethod
+    def fetch_image(image_url: str) -> tuple[bytes, str]:
+        """
+        Fetch an image URL and return (body_bytes, content_type).
+
+        Raises urllib.error.URLError when the image cannot be downloaded.
+        """
+        if not image_url:
+            raise ValueError('image_url must not be empty')
+
+        request = urllib.request.Request(
+            image_url,
+            headers={
+                'User-Agent': (
+                    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                    'AppleWebKit/537.36 (KHTML, like Gecko) '
+                    'Chrome/124.0 Safari/537.36'
+                ),
+                'Accept': 'image/avif,image/webp,image/apng,image/*,*/*;q=0.8',
+            },
+        )
+        with urllib.request.urlopen(request, timeout=15) as response:
+            content_type = (
+                response.headers.get_content_type()
+                or 'application/octet-stream'
+            )
+            return response.read(), content_type
+
+    @staticmethod
+    def extension_from_url(image_url: str) -> str:
+        """
+        Derive an image extension from the URL path.
+
+        Returns 'jpg' when the URL has no recognized image extension.
+        """
+        path = urlparse(image_url).path.lower()
+        for ext in ('jpg', 'jpeg', 'png', 'webp', 'gif', 'avif', 'svg'):
+            if path.endswith(f'.{ext}'):
+                return 'jpg' if ext == 'jpeg' else ext
+        return 'jpg'
