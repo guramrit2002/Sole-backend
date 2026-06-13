@@ -25,6 +25,9 @@ lxml>=5.0.0
 scrapling>=0.2.9
 playwright>=1.44.0
 
+# Image processing
+rembg>=2.0.59
+
 # Utilities
 click>=8.1.0
 rich>=13.0.0

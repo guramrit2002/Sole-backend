@@ -15,6 +15,7 @@ from typing import Optional
 from urllib.parse import urlparse
 
 from . import layer1, layer2, layer3
+from .image_processing import remove_background
 from .parser import ProductData
 from utils.s3 import S3Client, S3Error, S3Utility
 
@@ -92,18 +93,17 @@ _s3 = S3Client()
 _s3_utility = S3Utility(_s3)
 
 
-def store_image(image_url: str, expires_in: int = 3600) -> str:
+def store_image(image_url: str) -> str:
     """
-    Fetch an image URL, upload the content to S3, and return a permanent
-    public S3 URL.
+    Fetch an image URL, remove its background, store the result in S3, and
+    return a permanent public S3 URL.
 
     The S3 key is derived from a SHA-256 of the image URL, so calling this
     function twice with the same URL hits S3 once — the second call skips the
-    fetch and upload and returns the same public S3 URL.
+    fetch/upload and returns the same public S3 URL.
 
     Args:
-        image_url:  Public URL of the image to fetch and store.
-        expires_in: Seconds the presigned URL should remain valid (default 1 h).
+        image_url: Public URL of the image to fetch and store.
 
     Returns:
         Public HTTPS URL for the stored image.
@@ -111,31 +111,22 @@ def store_image(image_url: str, expires_in: int = 3600) -> str:
     Raises:
         ValueError:    If image_url is empty.
         urllib.error.URLError: If the image cannot be fetched.
-        S3Error:       If the upload or presigned URL generation fails.
+        S3Error:       If the upload fails.
     """
     if not image_url:
         raise ValueError("image_url must not be empty")
 
-    return _s3_utility.store_image_from_url(
-        image_url,
-        expires_in=expires_in,
-        presigned=False,
-    )
+    # rembg always outputs PNG, so the stored object is always a .png
+    key = _s3_utility.key_for_image_url(image_url, extension="png")
 
+    if _s3.exists(key):
+        logger.debug("image already in S3, skipping upload: %s", key)
+        return _s3.public_url(key)
 
-def _fetch_image(image_url: str) -> tuple[bytes, str]:
-    """
-    GET the image URL and return (body_bytes, content_type).
+    image_bytes, _content_type = _s3_utility.fetch_image(image_url)
+    image_bytes = remove_background(image_bytes)
 
-    Sends a browser-like Accept header so CDNs serve the right format.
-    Falls back to 'application/octet-stream' if the server omits Content-Type.
-    """
-    return S3Utility.fetch_image(image_url)
+    _s3_utility.store_image(image_bytes, key, content_type="image/png", public=True)
+    logger.info("stored image %s -> s3://%s", image_url, key)
 
-
-def _ext_from_url(image_url: str) -> str:
-    """
-    Derive a file extension from the URL path.
-    Returns 'jpg' as a safe fallback when the path has no recognisable extension.
-    """
-    return S3Utility.extension_from_url(image_url)
+    return _s3.public_url(key)
