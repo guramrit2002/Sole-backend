@@ -510,12 +510,14 @@ class S3Utility:
         *,
         expires_in: int = 3600,
         public: bool = False,
+        presigned: bool = True,
     ) -> str:
         """
-        Download an image URL, store it in S3, and return a presigned GET URL.
+        Download an image URL, store it in S3, and return its S3 URL.
 
         The generated key is stable for the same URL, so repeat calls can reuse
-        an existing S3 object and only generate a fresh presigned URL.
+        an existing S3 object. By default this returns a presigned GET URL; pass
+        presigned=False when storing a durable URL in the database.
         """
         key = self.key_for_image_url(image_url)
 
@@ -538,7 +540,9 @@ class S3Utility:
         else:
             logger.debug('image already in S3, skipping upload: %s', key)
 
-        return self.create_presigned_url(key, expires_in=expires_in)
+        if presigned:
+            return self.create_presigned_url(key, expires_in=expires_in)
+        return self.client.public_url(key)
 
     def create_presigned_url(self, key: str, *, expires_in: int = 3600) -> str:
         """Create a temporary GET URL for a stored S3 object."""

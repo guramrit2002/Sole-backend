@@ -17,14 +17,13 @@ import django
 django.setup()
 
 from utils.s3 import S3Client, S3Error
+from django.conf import settings
 
 ALLOWED_ORIGINS = [
-    "http://localhost:5173",
-    "http://localhost:5174",
-    "https://sole.app",
+    "*",
 ]
 
-PUBLIC_IMAGE_PREFIX = "Sole/images"
+PUBLIC_IMAGE_PREFIX = f"{settings.AWS_S3_KEY_PREFIX}/images".strip("/")
 
 def main() -> None:
     s3 = S3Client()

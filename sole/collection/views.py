@@ -1,11 +1,37 @@
 import re
+import logging
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from scraper.models import ScrapedProduct
+from scraper.services.pipeline import store_image
 from .models import Collection
 from .serializers import CollectionSerializer, CollectionWriteSerializer
+
+logger = logging.getLogger(__name__)
+
+
+def _needs_s3_backfill(shoe):
+    return bool(
+        shoe.image
+        and (
+            not shoe.image_s3
+            or 'X-Amz-Signature=' in shoe.image_s3
+            or 'AWSAccessKeyId=' in shoe.image_s3
+        )
+    )
+
+
+def _backfill_collection_s3_images(coll):
+    for shoe in coll.shoes.all():
+        if not _needs_s3_backfill(shoe):
+            continue
+        try:
+            shoe.image_s3 = store_image(shoe.image)
+            shoe.save(update_fields=['image_s3', 'updated_at'])
+        except Exception:
+            logger.exception('S3 image backfill failed for shoe %s', shoe.pk)
 
 
 def _sync_totals(coll):
@@ -64,6 +90,7 @@ class CollectionDetailView(APIView):
         coll = self._get(pk, request.user)
         if not coll:
             return Response(status=status.HTTP_404_NOT_FOUND)
+        _backfill_collection_s3_images(coll)
         total_shoes = coll.shoes.count()
         total_collections = coll.shoes.values("collections").distinct().count()
         return Response({**CollectionSerializer(coll).data, 
@@ -108,6 +135,12 @@ class CollectionShoeView(APIView):
         except ScrapedProduct.DoesNotExist:
             return Response({"error": "shoe not found"},
                             status=status.HTTP_404_NOT_FOUND)
+        if _needs_s3_backfill(shoe):
+            try:
+                shoe.image_s3 = store_image(shoe.image)
+                shoe.save(update_fields=['image_s3', 'updated_at'])
+            except Exception:
+                logger.exception('S3 image backfill failed for shoe %s', shoe.pk)
         coll.shoes.add(shoe)
         _sync_totals(coll)
         return Response(CollectionSerializer(coll).data)
@@ -125,4 +158,3 @@ class CollectionShoeView(APIView):
         coll.shoes.remove(shoe)
         _sync_totals(coll)
         return Response(CollectionSerializer(coll).data)
-

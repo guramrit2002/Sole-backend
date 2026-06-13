@@ -94,19 +94,19 @@ _s3_utility = S3Utility(_s3)
 
 def store_image(image_url: str, expires_in: int = 3600) -> str:
     """
-    Fetch an image URL, upload the content to S3, and return a presigned
-    GET URL valid for `expires_in` seconds.
+    Fetch an image URL, upload the content to S3, and return a permanent
+    public S3 URL.
 
     The S3 key is derived from a SHA-256 of the image URL, so calling this
     function twice with the same URL hits S3 once — the second call skips the
-    fetch and upload and goes straight to generating a fresh presigned URL.
+    fetch and upload and returns the same public S3 URL.
 
     Args:
         image_url:  Public URL of the image to fetch and store.
         expires_in: Seconds the presigned URL should remain valid (default 1 h).
 
     Returns:
-        Presigned HTTPS URL for the stored image.
+        Public HTTPS URL for the stored image.
 
     Raises:
         ValueError:    If image_url is empty.
@@ -116,7 +116,11 @@ def store_image(image_url: str, expires_in: int = 3600) -> str:
     if not image_url:
         raise ValueError("image_url must not be empty")
 
-    return _s3_utility.store_image_from_url(image_url, expires_in=expires_in)
+    return _s3_utility.store_image_from_url(
+        image_url,
+        expires_in=expires_in,
+        presigned=False,
+    )
 
 
 def _fetch_image(image_url: str) -> tuple[bytes, str]:
